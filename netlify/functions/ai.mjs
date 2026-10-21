@@ -11,10 +11,10 @@
 // GET /api/usage → { used, limit, loggedIn }   (límite diario de usos de IA)
 import { getUser } from "@netlify/identity";
 import { json, readJSON, str, wrap, checkOrigin, HttpError, env } from "../lib/http.mjs";
-import { gemini, DEFAULT_MODELS, lastModel } from "../lib/gemini.mjs";
+import { gemini, geminiStream, DEFAULT_MODELS, lastModel } from "../lib/gemini.mjs";
 
 /** Versión publicada: abrí /api/usage en tu sitio para ver cuál está activa. */
-export const APP_VERSION = "2026-10-20 · v4 (modelo nuevo de Gemini)";
+export const APP_VERSION = "2026-10-20 · v5 (más rápida y en vivo)";
 import { openStore, getUsage, addUsage, clientIP } from "../lib/data.mjs";
 import { sha256 } from "../../shared/integrity.mjs";
 import { resolveUser } from "../lib/auth.mjs";
@@ -108,7 +108,7 @@ const ANALYZE_SCHEMA = S("OBJECT", {
   required: ["title", "kind", "parties", "summary", "keyPoints", "dates", "money", "redFlags", "questions", "isContract"],
 });
 
-export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStore, getUser: getUserImpl = getUser, now = () => Date.now() } = {}) =>
+export const makeHandler = ({ ai: model = gemini, stream: streamModel = geminiStream, store: storeFactory = openStore, getUser: getUserImpl = getUser, now = () => Date.now() } = {}) =>
   wrap(async (req, context) => {
     // Quién usa la IA: la cuenta si hay sesión; si no, la IP (cifrada).
     const user = await resolveUser(req, getUserImpl);
@@ -128,16 +128,40 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
     const body = await readJSON(req, 5_500_000);
 
     // Solo cuenta un uso cuando la IA respondió bien: los errores no gastan el límite.
-    const ai = async (opts) => {
+    const checkLimit = async () => {
       const used = await readUsage();
       if (used >= limit) {
         throw new HttpError(429, user?.id
           ? `Llegaste al límite de ${limit} usos de IA por hoy. Mañana se renueva.`
           : `Llegaste a los ${limit} usos gratis de hoy sin cuenta. Creá una cuenta gratis para seguir usando la IA.`, { limit: true });
       }
-      const result = await model(opts);
+    };
+    const countUse = async () => {
       try { if (usageStore) await addUsage(usageStore, usageKey, now()); } catch { /* no bloquea */ }
+    };
+    const ai = async (opts) => {
+      await checkLimit();
+      const result = await model({ tier: "fast", ...opts });
+      await countUse();
       return result;
+    };
+    // En vivo: el texto llega a medida que la IA lo escribe (generar y traducir contratos).
+    const aiLive = async (opts) => {
+      if (!body.stream) return json({ result: await ai(opts) });
+      await checkLimit();
+      const chunks = await streamModel({ tier: "fast", ...opts });
+      await countUse();
+      const enc = new TextEncoder();
+      return new Response(new ReadableStream({
+        async start(controller) {
+          try {
+            for await (const t of chunks) controller.enqueue(enc.encode(t));
+          } catch (err) {
+            controller.enqueue(enc.encode(`\u0000ERROR:${err.message || "La IA se cortó."}`));
+          }
+          controller.close();
+        },
+      }), { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no" } });
     };
     const language = str(body.language, 60) || "Spanish";
 
@@ -145,7 +169,7 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
       case "generate": {
         const details = str(body.details, 5000);
         if (details.length < 8) throw new HttpError(400, "Faltan los detalles del contrato.");
-        const result = await ai({
+        return aiLive({
           system:
             "Sos una asistente experta en redactar borradores de contratos claros, completos y equilibrados para ambas partes. " +
             `Escribí todo el contrato en este idioma: ${language}. ` +
@@ -160,8 +184,8 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
             HTML_RULES,
           parts: [{ text: `Tipo de contrato: ${str(body.contractType, 80) || "Personalizado"}\n\nDetalles:\n${details}` }],
           temperature: 0.6,
+          tier: "smart",
         });
-        return json({ result });
       }
 
       case "rewrite": {
@@ -183,7 +207,7 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
       case "translate": {
         const html = str(body.html, 80_000);
         if (!html) throw new HttpError(400, "No hay contrato para traducir.");
-        const result = await ai({
+        return aiLive({
           system:
             `Traducí el siguiente contrato en HTML al idioma: ${language}. ` +
             "Usá terminología jurídica correcta en ese idioma. Mantené EXACTAMENTE la misma estructura de etiquetas HTML y sus atributos class, " +
@@ -192,7 +216,6 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
           parts: [{ text: html }],
           temperature: 0.2,
         });
-        return json({ result });
       }
 
       case "review": {
@@ -210,7 +233,7 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
           parts: [{ text }],
           temperature: 0.3,
           json: REVIEW_SCHEMA,
-          think: true,
+          tier: "smart",
         });
         return json({ result });
       }
@@ -256,7 +279,7 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
           parts,
           temperature: 0.3,
           json: ANALYZE_SCHEMA,
-          think: true,
+          tier: "smart",
         });
         return json({ result });
       }
@@ -324,7 +347,7 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
       case "translateUI": {
         // Traducción de la interfaz: no cuenta en el límite diario (es la página, no tu contenido),
         // queda en caché para todas las personas y tiene su propio tope anti-abuso.
-        const strings = Array.isArray(body.strings) ? body.strings.filter((s) => typeof s === "string").slice(0, 320) : [];
+        const strings = Array.isArray(body.strings) ? body.strings.filter((s) => typeof s === "string").slice(0, 400) : [];
         if (!strings.length) throw new HttpError(400, "No hay textos para traducir.");
         if (strings.join("").length > 24_000) throw new HttpError(413, "Demasiado texto.");
         const cacheKey = `i18n/${language.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}/${(await sha256(JSON.stringify(strings))).slice(0, 32)}`;
@@ -338,12 +361,13 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
         }
         if (usageStore) {
           const uiKey = `ui_${usageKey}`;
-          if ((await getUsage(usageStore, uiKey, now()).catch(() => 0)) >= 40) {
+          if ((await getUsage(usageStore, uiKey, now()).catch(() => 0)) >= 150) {
             throw new HttpError(429, "Probaste muchos idiomas hoy. Intentá de nuevo mañana.");
           }
           await addUsage(usageStore, uiKey, now()).catch(() => {});
         }
         const out = await model({
+          tier: "fast",
           system:
             `Traducí al idioma "${language}" el texto "s" de cada objeto del arreglo JSON. Es la interfaz de "Lacey Legal", ` +
             "una app web para crear y firmar contratos, con un tono cálido, cercano y profesional. " +

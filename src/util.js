@@ -45,6 +45,54 @@ export async function api(path, { method = "GET", body } = {}) {
 
 export const ai = (payload) => api("/api/ai", { method: "POST", body: payload }).then((d) => d.result);
 
+/**
+ * IA en vivo: llama onText(textoAcumulado) a medida que llega. Devuelve el texto completo.
+ * Si el servidor no manda streaming (versión vieja / error), cae a la respuesta normal.
+ */
+export async function aiStream(payload, onText) {
+  let res;
+  try {
+    res = await fetch("/api/ai", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, stream: true }),
+    });
+  } catch {
+    throw new ApiError("No hay conexión. Revisá tu internet.", 0);
+  }
+  const type = res.headers.get("Content-Type") || "";
+  if (!res.ok || type.includes("application/json") || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(data.error || `Error ${res.status}`, res.status, data);
+    onText(String(data.result || ""));
+    return String(data.result || "");
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let text = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += dec.decode(value, { stream: true });
+    const cut = text.indexOf("\u0000ERROR:");
+    if (cut >= 0) throw new ApiError(text.slice(cut + 7) || "La IA se cortó. Intentá de nuevo.", 502);
+    onText(text);
+  }
+  if (!text.trim()) throw new ApiError("La IA no devolvió texto. Probá reformulando.", 502);
+  return text;
+}
+
+/** Junta varias actualizaciones en una por cuadro de animación. */
+export function frameThrottle(fn) {
+  let pending = null;
+  let raf = 0;
+  const run = () => { raf = 0; const v = pending; pending = null; fn(v); };
+  const call = (v) => { pending = v; if (!raf) raf = requestAnimationFrame(run); };
+  call.flush = () => { if (raf) { cancelAnimationFrame(raf); run(); } };
+  return call;
+}
+
 // Deja pasar solo etiquetas seguras (la IA y los links compartidos devuelven HTML).
 const ALLOWED = new Set(["H1", "H2", "H3", "H4", "P", "UL", "OL", "LI", "STRONG", "EM", "B", "I", "U", "BR", "HR",
   "BLOCKQUOTE", "TABLE", "THEAD", "TBODY", "TR", "TD", "TH", "DIV", "SPAN", "IMG", "SECTION"]);

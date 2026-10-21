@@ -1,5 +1,5 @@
 /* ───────────── Lacey Legal · página pública de firma (firmar.html) ───────────── */
-import { $, toast, escapeHTML, sanitize, api, ai, cleanAIHtml, store } from "./util.js";
+import { $, toast, escapeHTML, sanitize, api, aiStream, frameThrottle, cleanAIHtml, store } from "./util.js";
 import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode, lastTranslateError } from "./i18n.js";
 import { createPad, signatureBlock } from "./signature-pad.js";
 import { exportPDF } from "./exporters.js";
@@ -165,10 +165,19 @@ $("#readBtn").addEventListener("click", async () => {
     clone.innerHTML = originalHTML;
     const imgs = [];
     clone.querySelectorAll("img").forEach((img, i) => { imgs.push(img.outerHTML); img.replaceWith(`[[SIG${i}]]`); });
-    let html = cleanAIHtml(await ai({ action: "translate", html: clone.innerHTML, language: lang }));
-    imgs.forEach((tag, i) => { html = html.replace(`[[SIG${i}]]`, tag); });
-    docEl.innerHTML = sanitize(html);
+    const withSigs = (text) => { let h = cleanAIHtml(text); imgs.forEach((tag, i) => { h = h.replace(`[[SIG${i}]]`, tag); }); return h; };
     docEl.dir = RTL.includes(lang) ? "rtl" : "ltr";
+    const paint = frameThrottle((text) => { docEl.innerHTML = sanitize(withSigs(text)); });
+    try {
+      const html = await aiStream({ action: "translate", html: clone.innerHTML, language: lang }, paint);
+      paint.flush();
+      docEl.innerHTML = sanitize(withSigs(html));
+    } catch (err) {
+      paint.flush();
+      docEl.innerHTML = originalHTML;
+      docEl.dir = RTL.includes(data?.lang) ? "rtl" : "ltr";
+      throw err;
+    }
     $("#translatedNote").classList.remove("hidden");
   } catch (err) {
     toast(err.message, true);

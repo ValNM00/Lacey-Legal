@@ -309,7 +309,7 @@ test("límite diario de IA", async () => {
   const u = await H(new Request(ORIGIN + "/api/usage", { headers: { "x-nf-client-connection-ip": "1.1.1.1" } }), { params: {} });
   const uj = await u.json();
   assert.deepEqual([uj.used, uj.limit, uj.loggedIn], [2, 2, false]);
-  assert.match(uj.version, /v4/);
+  assert.match(uj.version, /v5/);
   delete process.env.AI_DAILY_LIMIT_ANON;
 });
 
@@ -332,11 +332,11 @@ test("Gemini: si un modelo fue retirado, usa el siguiente y lo recuerda", async 
     return okText("hola");
   };
   assert.equal(await gemini({ system: "s", parts: [{ text: "x" }], fetchImpl, wait: async () => {} }), "hola");
-  assert.deepEqual(seen.map((x) => x.model), ["gemini-3.8-flash", "gemini-flash-latest"]);
-  assert.equal(seen[1].cfg.thinkingConfig.thinkingLevel, "low");
+  assert.deepEqual(seen.map((x) => x.model), ["gemini-3.8-flash", "gemini-3.6-flash"]);
+  assert.equal(seen[1].cfg.thinkingConfig.thinkingLevel, "minimal");
   seen.length = 0;
   await gemini({ system: "s", parts: [{ text: "x" }], fetchImpl, wait: async () => {} });
-  assert.equal(seen[0].model, "gemini-flash-latest", "recuerda el modelo que funcionó");
+  assert.equal(seen[0].model, "gemini-3.6-flash", "no vuelve a probar el modelo retirado");
 });
 
 test("Gemini: reintenta si está saturado y sin 'thinking' si el modelo no lo acepta", async () => {
@@ -420,4 +420,56 @@ test("Gemini: el error exacto de Google ('no longer available to new users') pas
     assert.deepEqual(used, ["gemini-2.5-flash", "gemini-3.8-flash"]);
   }
   delete process.env.GEMINI_MODEL;
+});
+
+test("Gemini: si un modelo está saturado (429) pasa al siguiente sin esperar, y lo evita un rato", async () => {
+  process.env.GEMINI_API_KEY = "k";
+  _resetWorkingModel();
+  const seen = [];
+  let waits = 0;
+  const fetchImpl = async (url) => {
+    const model = url.match(/models\/([^:]+):/)[1];
+    seen.push(model);
+    return model === "gemini-3.5-flash-lite" ? reply(429, { error: { message: "Resource exhausted" } }) : okText("ok");
+  };
+  assert.equal(await gemini({ tier: "fast", system: "s", parts: [{ text: "x" }], fetchImpl, wait: async () => { waits++; } }), "ok");
+  assert.deepEqual(seen, ["gemini-3.5-flash-lite", "gemini-3.6-flash"]);
+  assert.equal(waits, 0);
+  seen.length = 0;
+  await gemini({ tier: "fast", system: "s", parts: [{ text: "x" }], fetchImpl, wait: async () => {} });
+  assert.deepEqual(seen, ["gemini-3.6-flash"], "el saturado queda al final por unos segundos");
+});
+
+test("Gemini: si todos están saturados avisa con 429 claro", async () => {
+  process.env.GEMINI_API_KEY = "k";
+  _resetWorkingModel();
+  await assert.rejects(
+    gemini({ tier: "fast", system: "s", parts: [{ text: "x" }], wait: async () => {}, fetchImpl: async () => reply(429, { error: { message: "quota" } }) }),
+    (e) => e.status === 429 && /mucha demanda/.test(e.message),
+  );
+});
+
+import { geminiStream } from "../netlify/lib/gemini.mjs";
+test("Gemini en vivo: junta el texto de los eventos y salta el 'pensamiento'", async () => {
+  process.env.GEMINI_API_KEY = "k";
+  _resetWorkingModel();
+  const ev = (parts) => `data: ${JSON.stringify({ candidates: [{ content: { parts } }] })}\n\n`;
+  const sse = ev([{ text: "pienso", thought: true }]) + ev([{ text: "<h1>Hola" }]) + ev([{ text: "</h1>" }]);
+  let url = "";
+  const fetchImpl = async (u) => { url = u; return { ok: true, status: 200, body: new Response(sse).body }; };
+  let out = "";
+  for await (const t of await geminiStream({ system: "s", parts: [{ text: "x" }], fetchImpl })) out += t;
+  assert.equal(out, "<h1>Hola</h1>");
+  assert.match(url, /streamGenerateContent\?alt=sse/);
+});
+
+test("IA en vivo: generar con stream devuelve texto en pedazos y cuenta un uso", async () => {
+  const fakeStream = async () => (async function* () { yield "<h1>Con"; yield "trato</h1>"; })();
+  const H = ai({ ai: async () => "x", stream: fakeStream, store: () => store, getUser: async () => null });
+  const res = await H(new Request(ORIGIN + "/api/ai", { method: "POST", headers: { "Content-Type": "application/json", Origin: ORIGIN, "x-nf-client-connection-ip": "9.9.9.9" }, body: JSON.stringify({ action: "generate", details: "Un contrato de prueba", stream: true }) }), { params: {} });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("Content-Type"), /text\/plain/);
+  assert.equal(await res.text(), "<h1>Contrato</h1>");
+  const u = await (await H(new Request(ORIGIN + "/api/usage", { headers: { "x-nf-client-connection-ip": "9.9.9.9" } }), { params: {} })).json();
+  assert.equal(u.used, 1);
 });

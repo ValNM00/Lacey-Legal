@@ -82,7 +82,10 @@ Las claves secretas **nunca** están en el frontend.
    | `AI_DAILY_LIMIT` | Usos de IA por día con cuenta (por defecto 100) | No |
    | `AI_DAILY_LIMIT_ANON` | Usos de IA por día sin cuenta (por defecto 30) | No |
    | `USAGE_SALT` | Texto secreto para cifrar las IP en el conteo de uso | Recomendada |
-   | `GEMINI_MODEL` | Forzar un modelo de Gemini. Si no la ponés, la app usa `gemini-3.8-flash` y, si Google lo retira, pasa sola al siguiente vigente | No (mejor no ponerla) |
+   | `GEMINI_MODEL` | Forzar un modelo de Gemini. Si no la ponés, la app usa `gemini-3.5-flash-lite` para tareas rápidas y `gemini-3.8-flash` para redactar y revisar; si uno está saturado o fue retirado, pasa sola al siguiente | No (mejor no ponerla) |
+
+> **Muchas personas a la vez:** la cuota gratis de Gemini es por proyecto y por minuto. La app reparte el trabajo entre varios modelos, pero para uso real con varias personas al mismo tiempo conviene activar la facturación en Google AI Studio (Get API key → Set up billing): los límites suben muchísimo y el costo con estos modelos es muy bajo.
+
 
 4. **Activar las cuentas**: *Project configuration → Identity → Enable Identity*. Para el botón de Google: *Identity → Registration → External providers → Google*.
 5. **Deploy**: *Deploys → Trigger deploy* para que tome las variables.

@@ -32,6 +32,17 @@ const CONTRACT = (title) => `<h1>${title}</h1><p>Entre <strong>Sofía Méndez</s
 <h2>Primera: Objeto</h2><p>La prestadora diseñará la identidad de marca del cliente, incluyendo logotipo y paleta de colores.</p>
 <h2>Segunda: Precio</h2><p>El cliente pagará 800 USD en dos tractos iguales.</p><ol><li>Primer pago al firmar.</li><li>Segundo pago a la entrega.</li></ol>
 <script>alert(1)</script><p onclick="x()">Texto con atributo peligroso.</p>`;
+// Simula la respuesta en vivo: entrega el texto en pedacitos.
+async function fakeStream(opts) {
+  const full = String(await fakeAI(opts));
+  return (async function* () {
+    for (let i = 0; i < full.length; i += 120) {
+      await new Promise((r) => setTimeout(r, 15));
+      yield full.slice(i, i + 120);
+    }
+  })();
+}
+
 async function fakeAI({ system, parts, json }) {
   const text = parts.map((p) => p.text || "").join("\n");
   aiCalls.push({ system: system.slice(0, 60), text: text.slice(0, 200), hasFile: parts.some((p) => p.inlineData) });
@@ -111,7 +122,7 @@ const routes = [
   [/^\/api\/contracts(?:\/([^/]+))?(?:\/versions(?:\/([^/]+))?)?(?:\/comments\/([^/]+))?$/, contracts({ store: () => store, getUser }), (m) => ({ id: m[1], vid: m[2], commentId: m[3] })],
   [/^\/api\/share(?:\/([^/]+))?(?:\/remind)?$/, share({ store: () => store, getUser, fetchImpl: noMail }), (m) => ({ token: m[1] })],
   [/^\/api\/sign\/([^/]+)(?:\/comment)?$/, sign({ store: () => store, fetchImpl: noMail }), (m) => ({ token: m[1] })],
-  [/^\/api\/(?:ai|usage)$/, aiFn({ ai: fakeAI, store: () => store, getUser }), () => ({})],
+  [/^\/api\/(?:ai|usage)$/, aiFn({ ai: fakeAI, stream: fakeStream, store: () => store, getUser }), () => ({})],
   [/^\/api\/templates(?:\/([^/]+))?$/, templatesFn({ store: () => store, getUser }), (m) => ({ id: m[1] })],
   [/^\/api\/(?:profile|account)$/, profileFn({ store: () => store, getUser, deleteIdentityUser: async () => {} }), () => ({})],
 ];
@@ -131,7 +142,10 @@ export function start(port = 8777) {
       const request = new Request(url, { method: req.method, headers: req.headers, body: ["GET", "HEAD"].includes(req.method) ? undefined : body });
       const r = await handler(request, { params: params(m), ip: req.socket.remoteAddress });
       res.writeHead(r.status, Object.fromEntries(r.headers));
-      return res.end(Buffer.from(await r.arrayBuffer()));
+      if (!r.body) return res.end();
+      const reader = r.body.getReader(); // en vivo, como Netlify
+      for (;;) { const { value, done } = await reader.read(); if (done) break; res.write(value); }
+      return res.end();
     }
     let file = normalize(join(ROOT, "public", url.pathname === "/" ? "index.html" : url.pathname));
     if (!file.startsWith(ROOT + "/public")) return res.writeHead(403).end();

@@ -1,6 +1,6 @@
 /* ───────────── Lacey Legal · aplicación principal ───────────── */
 import {
-  $, $$, toast, escapeHTML, sanitize, cleanAIHtml, ai, debounce, uid, store,
+  $, $$, toast, escapeHTML, sanitize, cleanAIHtml, ai, aiStream, frameThrottle, debounce, uid, store,
   fileToBase64, daysLeft, openDialog, closeDialog,
 } from "./util.js";
 import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode, lastTranslateError } from "./i18n.js";
@@ -254,15 +254,25 @@ $("#generateBtn").addEventListener("click", async () => {
   setBusy(true, t("writing"));
   setMood("pensando");
   try {
-    const html = await ai({ action: "generate", contractType: t("type_" + selectedType), details, language: lang });
-    if (cur && !docIsEmpty()) await save({ silent: true });
-    cur = {
-      id: uid(), updated: null, remindDays: 7, remindEmail: false, folder: "", audit: [], comments: [],
-      endDate: activeTab === "guided" ? $("#fEnd").value : "",
+    const endDate = activeTab === "guided" ? $("#fEnd").value : "";
+    let started = false;
+    const paint = frameThrottle((text) => setDocHTML(cleanAIHtml(text), lang));
+    const start = async () => {
+      started = true;
+      if (cur && !docIsEmpty()) await save({ silent: true });
+      cur = { id: uid(), updated: null, remindDays: 7, remindEmail: false, folder: "", audit: [], comments: [], endDate };
+      $("#loading").classList.add("hidden"); // el texto ya se ve escribiéndose
+      $(".editor-card").scrollIntoView({ behavior: "smooth", block: "start" });
     };
+    let first = null;
+    const html = await aiStream({ action: "generate", contractType: t("type_" + selectedType), details, language: lang }, (text) => {
+      if (!started) first = first || start();
+      paint(text);
+    });
+    await first;
+    paint.flush();
     setDocHTML(cleanAIHtml(html), lang);
     await save({ version: t("vGenerated"), silent: true });
-    $(".editor-card").scrollIntoView({ behavior: "smooth", block: "start" });
     if (!react("feliz", t("lc_generated"), { actions: ["review"] })) toast(t("ready"));
   } catch (err) {
     aiFailed(err);
@@ -322,8 +332,18 @@ $("#translateBtn").addEventListener("click", async () => {
   setBusy(true, t("translating"));
   setMood("pensando");
   try {
-    let html = cleanAIHtml(await ai({ action: "translate", html: clone.innerHTML, language: lang }));
-    imgs.forEach((tag, i) => { html = html.replace(`[[SIG${i}]]`, tag); });
+    const withSigs = (text) => { let h = cleanAIHtml(text); imgs.forEach((tag, i) => { h = h.replace(`[[SIG${i}]]`, tag); }); return h; };
+    const original = doc.innerHTML;
+    const paint = frameThrottle((text) => { $("#loading").classList.add("hidden"); setDocHTML(withSigs(text), lang); });
+    let html;
+    try {
+      html = withSigs(await aiStream({ action: "translate", html: clone.innerHTML, language: lang }, paint));
+    } catch (err) {
+      paint.flush();
+      doc.innerHTML = original; // si se corta a la mitad, vuelve el contrato como estaba
+      throw err;
+    }
+    paint.flush();
     setDocHTML(html, lang);
     await save({ version: t("vTranslated", { lang: $("#transLang").selectedOptions[0]?.textContent || lang }), silent: true });
     setMood("feliz");

@@ -106,41 +106,76 @@ function apply() {
   listeners.forEach((fn) => fn(lang));
 }
 
-async function translateAll(target) {
+// Idiomas con traducción ya incluida en el sitio (instantánea, sin IA).
+const STATIC = ["en", "pt", "fr"];
+const CHUNK_CHARS = 2500;
+const CHUNK_ITEMS = 70;
+const PARALLEL = 3;
+
+async function staticDict(target) {
+  const code = CODES[target];
+  if (!STATIC.includes(code)) return {};
+  try {
+    const res = await fetch(`/i18n/${code}.json`, { cache: "force-cache" });
+    return res.ok ? await res.json() : {};
+  } catch {
+    return {};
+  }
+}
+
+async function translateAll(target, onPartial) {
   const strings = sourceStrings();
   const cacheKey = `laceyLegal.i18n.${target}.${hash(strings.join("\u0001"))}`;
   const cached = store.get(cacheKey);
   if (cached) return cached;
-  // Pocos pedidos grandes, de a uno (Gemini gratis acepta pocas llamadas por minuto).
+  const partialKey = `laceyLegal.i18n.${target}.partial`;
+
+  // 1. Lo que ya tenemos: diccionario incluido + lo traducido antes en este navegador.
+  const map = { ...(store.get(partialKey) || {}), ...(await staticDict(target)) };
+  const missing = strings.filter((x) => !map[x]);
+  if (!missing.length) {
+    store.set(cacheKey, map);
+    return map;
+  }
+  if (Object.keys(map).length) onPartial?.({ ...map });
+
+  // 2. Lo que falta, en pedazos chicos y en paralelo; se aplica a medida que llega.
   const chunks = [];
   let chunk = [];
   let size = 0;
-  for (const str of strings) {
-    if (chunk.length && (size + str.length > 9000 || chunk.length >= 300)) { chunks.push(chunk); chunk = []; size = 0; }
-    chunk.push(str);
-    size += str.length;
+  for (const x of missing) {
+    if (chunk.length && (size + x.length > CHUNK_CHARS || chunk.length >= CHUNK_ITEMS)) { chunks.push(chunk); chunk = []; size = 0; }
+    chunk.push(x);
+    size += x.length;
   }
   if (chunk.length) chunks.push(chunk);
 
-  const map = {};
   let failed = 0;
-  let lastError = null;
-  for (const c of chunks) {
-    let result = null;
-    for (let attempt = 0; attempt < 2 && !result; attempt++) {
-      try {
-        result = await ai({ action: "translateUI", language: target, strings: c });
-      } catch (err) {
-        lastError = err;
-        if (err.status === 400 || err.status === 413) break;
-        await new Promise((r) => setTimeout(r, 2500));
+  let error = null;
+  let next = 0;
+  const worker = async () => {
+    while (next < chunks.length) {
+      const c = chunks[next++];
+      let result = null;
+      for (let attempt = 0; attempt < 3 && !result; attempt++) {
+        try {
+          result = await ai({ action: "translateUI", language: target, strings: c });
+        } catch (err) {
+          error = err;
+          if (err.status === 400 || err.status === 413) break;
+          await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        }
       }
+      if (!result) { failed++; continue; }
+      c.forEach((x, i) => { if (result[i] && result[i] !== x) map[x] = result[i]; });
+      onPartial?.({ ...map });
     }
-    if (!result) { failed++; continue; }
-    c.forEach((str, i) => { map[str] = result[i] || str; });
-  }
-  if (failed === chunks.length) throw lastError || new Error("translate-failed");
-  if (!failed) store.set(cacheKey, map); // solo guardamos si salió completa
+  };
+  await Promise.all(Array.from({ length: Math.min(PARALLEL, chunks.length) }, worker));
+
+  if (failed === chunks.length && !Object.keys(map).length) throw error || new Error("translate-failed");
+  if (!failed) { store.set(cacheKey, map); store.remove(partialKey); }
+  else store.set(partialKey, map); // la próxima vez solo pide lo que faltó
   return map;
 }
 
@@ -156,7 +191,11 @@ export async function setUILang(target, { onStart, onEnd } = {}) {
   }
   onStart?.();
   try {
-    dict = await translateAll(target);
+    dict = await translateAll(target, (partial) => {
+      dict = partial;
+      lang = target;
+      apply();
+    });
     lang = target;
     store.set(PREF_KEY, lang);
     apply();
@@ -172,6 +211,7 @@ export async function setUILang(target, { onStart, onEnd } = {}) {
 
 export function initI18n() {
   collect();
+  window.__laceyUIStrings = sourceStrings;
   return store.get(PREF_KEY, "Spanish");
 }
 
