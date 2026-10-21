@@ -79,8 +79,8 @@ Las claves secretas **nunca** están en el frontend.
    | `CONTACT_EMAIL` | Correo de contacto en Términos y Privacidad | Muy recomendada |
    | `RESEND_API_KEY` | Correos: invitaciones, recordatorios, avisos ([resend.com](https://resend.com)) | No |
    | `REMINDER_FROM` | Remitente, ej. `Lacey Legal <avisos@tudominio.com>` | Con Resend |
-   | `AI_DAILY_LIMIT` | Usos de IA por día con cuenta (por defecto 40) | No |
-   | `AI_DAILY_LIMIT_ANON` | Usos de IA por día sin cuenta (por defecto 12) | No |
+   | `AI_DAILY_LIMIT` | Usos de IA por día con cuenta (por defecto 100) | No |
+   | `AI_DAILY_LIMIT_ANON` | Usos de IA por día sin cuenta (por defecto 30) | No |
    | `USAGE_SALT` | Texto secreto para cifrar las IP en el conteo de uso | Recomendada |
    | `GEMINI_MODEL` | Forzar un modelo de Gemini. Si no la ponés, la app usa `gemini-3.8-flash` y, si Google lo retira, pasa sola al siguiente vigente | No (mejor no ponerla) |
 
