@@ -30,7 +30,7 @@ const k = {
   templates: (uid) => `users/${uid}/templates`,
   profile: (uid) => `users/${uid}/profile`,
   share: (token) => `shares/${token}`,
-  usage: (day, key) => `usage/${day}/${key}`,
+  usage: (day, key) => `usage2/${day}/${key}`,
 };
 export const keys = k;
 

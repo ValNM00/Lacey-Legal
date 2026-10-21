@@ -36,7 +36,7 @@ export function inviteEmail({ ownerName, signerName, title, link, reminder = fal
 export const makeHandler = ({ store: storeFactory = openStore, getUser: getUserImpl = getUser, fetchImpl = fetch } = {}) =>
   wrap(async (req, context) => {
     checkOrigin(req);
-    const user = await requireUser(getUserImpl);
+    const user = await requireUser(getUserImpl, req);
     const store = storeFactory();
     const token = context.params?.token || "";
     const ownerName = user.name || user.email.split("@")[0] || "";

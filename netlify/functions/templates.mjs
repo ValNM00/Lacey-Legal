@@ -24,7 +24,7 @@ export function templateFields(html) {
 export const makeHandler = ({ store: storeFactory = openStore, getUser: getUserImpl = getUser } = {}) =>
   wrap(async (req, context) => {
     if (req.method !== "GET") checkOrigin(req);
-    const user = await requireUser(getUserImpl);
+    const user = await requireUser(getUserImpl, req);
     const store = storeFactory();
     const id = context.params?.id;
     if (id && !ID_RE.test(id)) throw new HttpError(400, "Identificador inválido.");

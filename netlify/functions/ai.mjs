@@ -11,13 +11,17 @@
 // GET /api/usage → { used, limit, loggedIn }   (límite diario de usos de IA)
 import { getUser } from "@netlify/identity";
 import { json, readJSON, str, wrap, checkOrigin, HttpError, env } from "../lib/http.mjs";
-import { gemini } from "../lib/gemini.mjs";
+import { gemini, DEFAULT_MODELS, lastModel } from "../lib/gemini.mjs";
+
+/** Versión publicada: abrí /api/usage en tu sitio para ver cuál está activa. */
+export const APP_VERSION = "2026-10-20 · v4 (modelo nuevo de Gemini)";
 import { openStore, getUsage, addUsage, clientIP } from "../lib/data.mjs";
 import { sha256 } from "../../shared/integrity.mjs";
+import { resolveUser } from "../lib/auth.mjs";
 
 const limits = () => ({
-  user: parseInt(env("AI_DAILY_LIMIT") || "40", 10) || 40,
-  anon: parseInt(env("AI_DAILY_LIMIT_ANON") || "12", 10) || 12,
+  user: parseInt(env("AI_DAILY_LIMIT") || "100", 10) || 100,
+  anon: parseInt(env("AI_DAILY_LIMIT_ANON") || "30", 10) || 30,
 });
 
 const HTML_RULES =
@@ -107,7 +111,7 @@ const ANALYZE_SCHEMA = S("OBJECT", {
 export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStore, getUser: getUserImpl = getUser, now = () => Date.now() } = {}) =>
   wrap(async (req, context) => {
     // Quién usa la IA: la cuenta si hay sesión; si no, la IP (cifrada).
-    const user = await getUserImpl().catch(() => null);
+    const user = await resolveUser(req, getUserImpl);
     const usageKey = user?.id ? `u_${user.id}` : `ip_${(await sha256((env("USAGE_SALT") || "lacey") + clientIP(req, context))).slice(0, 24)}`;
     const limit = user?.id ? limits().user : limits().anon;
     let usageStore = null;
@@ -117,22 +121,23 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
     };
 
     if (req.method === "GET") {
-      return json({ used: Math.min(await readUsage(), limit), limit, loggedIn: !!user?.id });
+      return json({ used: Math.min(await readUsage(), limit), limit, loggedIn: !!user?.id, version: APP_VERSION, model: lastModel() || DEFAULT_MODELS[0] });
     }
     if (req.method !== "POST") throw new HttpError(405, "Método no permitido.");
     checkOrigin(req);
     const body = await readJSON(req, 5_500_000);
 
-    // Cada llamada real a la IA cuenta un uso.
+    // Solo cuenta un uso cuando la IA respondió bien: los errores no gastan el límite.
     const ai = async (opts) => {
       const used = await readUsage();
       if (used >= limit) {
         throw new HttpError(429, user?.id
           ? `Llegaste al límite de ${limit} usos de IA por hoy. Mañana se renueva.`
-          : `Llegaste al límite de ${limit} usos de IA por hoy. Iniciá sesión para tener más.`, { limit: true });
+          : `Llegaste a los ${limit} usos gratis de hoy sin cuenta. Creá una cuenta gratis para seguir usando la IA.`, { limit: true });
       }
+      const result = await model(opts);
       try { if (usageStore) await addUsage(usageStore, usageKey, now()); } catch { /* no bloquea */ }
-      return model(opts);
+      return result;
     };
     const language = str(body.language, 60) || "Spanish";
 

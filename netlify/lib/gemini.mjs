@@ -116,5 +116,7 @@ function parseResult(data, json) {
   }
 }
 
+export const lastModel = () => workingModel;
+
 /** Solo para pruebas. */
 export const _resetWorkingModel = () => { workingModel = null; };

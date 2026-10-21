@@ -29,7 +29,7 @@ export const makeHandler = ({
 } = {}) =>
   wrap(async (req) => {
     if (req.method !== "GET") checkOrigin(req);
-    const user = await requireUser(getUserImpl);
+    const user = await requireUser(getUserImpl, req);
     const store = storeFactory();
     const isAccount = new URL(req.url).pathname.startsWith("/api/account");
 

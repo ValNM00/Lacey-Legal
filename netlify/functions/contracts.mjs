@@ -23,7 +23,7 @@ const AUDIT_TYPES = ["signed-here"];
 export const makeHandler = ({ store: storeFactory = openStore, getUser: getUserImpl = getUser } = {}) =>
   wrap(async (req, context) => {
     if (req.method !== "GET") checkOrigin(req);
-    const user = await requireUser(getUserImpl);
+    const user = await requireUser(getUserImpl, req);
     const store = storeFactory();
     const { id, vid, commentId } = context.params || {};
     const path = new URL(req.url).pathname;

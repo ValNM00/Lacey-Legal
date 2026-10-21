@@ -304,10 +304,12 @@ test("límite diario de IA", async () => {
   assert.equal((await R("1.1.1.1")).status, 200);
   const third = await R("1.1.1.1");
   assert.equal(third.status, 429);
-  assert.match((await third.json()).error, /Iniciá sesión/);
+  assert.match((await third.json()).error, /Creá una cuenta/);
   assert.equal((await R("2.2.2.2")).status, 200, "otra IP tiene su propio límite");
   const u = await H(new Request(ORIGIN + "/api/usage", { headers: { "x-nf-client-connection-ip": "1.1.1.1" } }), { params: {} });
-  assert.deepEqual(await u.json(), { used: 2, limit: 2, loggedIn: false });
+  const uj = await u.json();
+  assert.deepEqual([uj.used, uj.limit, uj.loggedIn], [2, 2, false]);
+  assert.match(uj.version, /v4/);
   delete process.env.AI_DAILY_LIMIT_ANON;
 });
 
@@ -372,4 +374,50 @@ test("Traducir la página: alinea por índice y no gasta el límite diario", asy
     assert.deepEqual((await r.json()).result, ["Hola", "Mundo", "Hecho"]);
   }
   delete process.env.AI_DAILY_LIMIT_ANON;
+});
+
+test("los errores de la IA no gastan el límite diario", async () => {
+  process.env.AI_DAILY_LIMIT_ANON = "2";
+  let fail = true;
+  const flaky = async () => { if (fail) throw new Error("Google caído"); return "<h1>Ok</h1>"; };
+  const H = ai({ ai: flaky, store: () => store, getUser: async () => null });
+  const R = () => H(new Request(ORIGIN + "/api/ai", { method: "POST", headers: { "Content-Type": "application/json", Origin: ORIGIN, "x-nf-client-connection-ip": "7.7.7.7" }, body: JSON.stringify({ action: "generate", details: "Un contrato de prueba largo" }) }), { params: {} });
+  for (let i = 0; i < 5; i++) assert.equal((await R()).status, 500);
+  fail = false;
+  assert.equal((await R()).status, 200, "después de 5 errores todavía tiene sus 2 usos");
+  assert.equal((await R()).status, 200);
+  assert.equal((await R()).status, 429);
+  delete process.env.AI_DAILY_LIMIT_ANON;
+});
+
+import { resolveUser } from "../netlify/lib/auth.mjs";
+test("sesión: si la librería no la lee, la confirma con Netlify Identity", async () => {
+  const r = new Request(ORIGIN + "/api/ai", { headers: { cookie: "otra=1; nf_jwt=token-valido" } });
+  let asked = null;
+  const fetchImpl = async (url, o) => { asked = [url, o.headers.Authorization]; return { ok: true, json: async () => ({ id: "u-1", email: "v@x.com" }) }; };
+  const u = await resolveUser(r, async () => null, fetchImpl);
+  assert.equal(u.id, "u-1");
+  assert.deepEqual(asked, [ORIGIN + "/.netlify/identity/user", "Bearer token-valido"]);
+  const bad = await resolveUser(r, async () => null, async () => ({ ok: false }));
+  assert.equal(bad, null, "token inválido → sin sesión");
+});
+
+test("Gemini: el error exacto de Google ('no longer available to new users') pasa al modelo nuevo", async () => {
+  process.env.GEMINI_API_KEY = "k";
+  process.env.GEMINI_MODEL = "gemini-2.5-flash"; // aunque alguien la haya dejado configurada
+  _resetWorkingModel();
+  const used = [];
+  const msg = "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements.";
+  for (const status of [400, 403, 404]) {
+    used.length = 0;
+    _resetWorkingModel();
+    const r = await gemini({ system: "s", parts: [{ text: "x" }], wait: async () => {}, fetchImpl: async (url) => {
+      const model = url.match(/models\/([^:]+):/)[1];
+      used.push(model);
+      return model === "gemini-2.5-flash" ? reply(status, { error: { message: msg } }) : okText("listo");
+    } });
+    assert.equal(r, "listo", `status ${status}`);
+    assert.deepEqual(used, ["gemini-2.5-flash", "gemini-3.8-flash"]);
+  }
+  delete process.env.GEMINI_MODEL;
 });
