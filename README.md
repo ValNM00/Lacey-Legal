@@ -2,6 +2,8 @@
 
 Tu asistente legal con IA: creá contratos, revisalos, mandalos a firmar a varias personas, recibí pedidos de cambio y guardá todo con certificado de firmas. Con Lacey, una asistente animada que te explica todo. Hecho con Google Gemini y Netlify.
 
+Creado por **Valeria Estrella Naranjo Mayorga**. © 2026 Todos los derechos reservados.
+
 ## Funciones
 
 **Crear y editar**

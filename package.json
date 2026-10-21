@@ -16,5 +16,9 @@
     "esbuild": "^0.28.2",
     "html2pdf.js": "^0.14.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "Valeria Estrella Naranjo Mayorga",
+  "license": "UNLICENSED"
 }
