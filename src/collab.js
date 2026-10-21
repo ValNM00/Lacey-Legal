@@ -243,7 +243,7 @@ async function openCertificate() {
 /** HTML del certificado si el contrato tiene firmas (para el PDF/Word). */
 export async function certificateFor() {
   const audit = app.cur?.audit || [];
-  const hasSigs = audit.some((e) => e.type === "signed" || e.type === "signed-here") || app.doc.querySelector(".sig-block");
+  const hasSigs = audit.some((e) => e.type === "signed" || e.type === "signed-here") || app.doc.querySelector(".sig-block img");
   if (!hasSigs) return null;
   return certificateHTML({ title: app.cur?.title || "", html: app.doc.innerHTML, audit, docEl: app.doc });
 }

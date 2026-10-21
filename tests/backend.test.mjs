@@ -309,7 +309,7 @@ test("límite diario de IA", async () => {
   const u = await H(new Request(ORIGIN + "/api/usage", { headers: { "x-nf-client-connection-ip": "1.1.1.1" } }), { params: {} });
   const uj = await u.json();
   assert.deepEqual([uj.used, uj.limit, uj.loggedIn], [2, 2, false]);
-  assert.match(uj.version, /v5/);
+  assert.match(uj.version, /v6/);
   delete process.env.AI_DAILY_LIMIT_ANON;
 });
 
@@ -472,4 +472,42 @@ test("IA en vivo: generar con stream devuelve texto en pedazos y cuenta un uso",
   assert.equal(await res.text(), "<h1>Contrato</h1>");
   const u = await (await H(new Request(ORIGIN + "/api/usage", { headers: { "x-nf-client-connection-ip": "9.9.9.9" } }), { params: {} })).json();
   assert.equal(u.used, 1);
+});
+
+import { placeSignature, countSignatures } from "../shared/integrity.mjs";
+const EMPTY = (n, r) => `<div class="sig-block"><p class="sig-line">${n}</p><p class="sig-meta">${r} · Fecha: [__________]</p></div>`;
+const WITH_SLOTS = `<h1>C</h1><p>Texto</p><h2>Firmas</h2><div class="signatures">${EMPTY("Sofía Méndez", "Prestadora")}${EMPTY("Café Rosa S.A.", "Cliente")}</div>`;
+const SIGNED = (n) => `<div class="sig-block"><img src="data:image/png;base64,AAAA" alt="x"><p class="sig-line">${n}</p><p class="sig-meta">firma</p></div>`;
+
+test("firmas: ocupa el espacio de la persona por nombre o rol, y los espacios vacíos no cuentan", async () => {
+  assert.equal(countSignatures(WITH_SLOTS), 0);
+  let h = placeSignature(WITH_SLOTS, { block: SIGNED("Cafe Rosa SA"), name: "Cafe Rosa SA", role: "Cliente" });
+  assert.equal(countSignatures(h), 1);
+  assert.ok(h.indexOf("Sofía Méndez") < h.indexOf("<img"), "firmó en el espacio del cliente (el segundo)");
+  assert.equal((h.match(/class="sig-block"/g) || []).length, 2, "no agrega un bloque extra");
+  h = placeSignature(h, { block: SIGNED("Sofia Mendez"), name: "sofia mendez" });
+  assert.equal(countSignatures(h), 2);
+  h = placeSignature(h, { block: SIGNED("Tercera"), name: "Tercera persona" });
+  assert.equal(countSignatures(h), 3, "sin espacios libres, se agrega dentro de la sección");
+  assert.equal((h.match(/class="signatures"/g) || []).length, 1);
+  assert.equal(await documentHash(h), await documentHash(WITH_SLOTS), "firmar no cambia la huella del texto");
+  const old = placeSignature("<h1>Viejo</h1><p>sin firmas</p>", { block: SIGNED("Ana"), name: "Ana" });
+  assert.match(old, /<h2>Firmas<\/h2><div class="signatures">/);
+});
+
+test("IA en vivo: si se acaba el tiempo avisa que falta (MORE) y 'continue' no gasta un uso", async () => {
+  process.env.STREAM_BUDGET_MS = "1";
+  const { makeHandler: aiFresh } = await import("../netlify/functions/ai.mjs?budget");
+  const slow = async () => (async function* () { yield "<h1>A</h1>"; await new Promise((r) => setTimeout(r, 20)); yield "<p>B</p>"; yield "<p>C</p>"; })();
+  const H = aiFresh({ ai: async () => "x", stream: slow, store: () => store, getUser: async () => null });
+  const call = (b) => H(new Request(ORIGIN + "/api/ai", { method: "POST", headers: { "Content-Type": "application/json", Origin: ORIGIN, "x-nf-client-connection-ip": "7.7.7.71" }, body: JSON.stringify({ stream: true, ...b }) }), { params: {} });
+  const text = await (await call({ action: "generate", details: "Contrato de prueba" })).text();
+  assert.match(text, /\u0000MORE$/);
+  assert.ok(!text.includes("<p>C</p>"), "cortó antes del final");
+  const cont = await call({ action: "continue", mode: "generate", done: "<h1>A</h1><p>" + "x".repeat(60) + "</p>", details: "d" });
+  assert.equal(cont.status, 200);
+  await cont.text();
+  const u = await (await H(new Request(ORIGIN + "/api/usage", { headers: { "x-nf-client-connection-ip": "7.7.7.71" } }), { params: {} })).json();
+  assert.equal(u.used, 1, "la continuación no cuenta como otro uso");
+  delete process.env.STREAM_BUDGET_MS;
 });

@@ -1,5 +1,5 @@
 /* ───────────── Lacey Legal · página pública de firma (firmar.html) ───────────── */
-import { $, toast, escapeHTML, sanitize, api, aiStream, frameThrottle, cleanAIHtml, store } from "./util.js";
+import { $, toast, escapeHTML, sanitize, api, aiComplete, frameThrottle, cleanAIHtml, store } from "./util.js";
 import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode, lastTranslateError } from "./i18n.js";
 import { createPad, signatureBlock } from "./signature-pad.js";
 import { exportPDF } from "./exporters.js";
@@ -169,7 +169,7 @@ $("#readBtn").addEventListener("click", async () => {
     docEl.dir = RTL.includes(lang) ? "rtl" : "ltr";
     const paint = frameThrottle((text) => { docEl.innerHTML = sanitize(withSigs(text)); });
     try {
-      const html = await aiStream({ action: "translate", html: clone.innerHTML, language: lang }, paint);
+      const html = await aiComplete({ action: "translate", html: clone.innerHTML, language: lang }, paint, { mode: "translate", source: clone.innerHTML });
       paint.flush();
       docEl.innerHTML = sanitize(withSigs(html));
     } catch (err) {

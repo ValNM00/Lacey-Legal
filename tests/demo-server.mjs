@@ -28,10 +28,12 @@ const store = {
 export const aiCalls = [];
 
 // ── IA simulada ──
+const SIGS = `<h2>Firmas</h2><div class="signatures"><div class="sig-block"><p class="sig-line">Sofía Méndez</p><p class="sig-meta">Prestadora del servicio · Fecha: [__________]</p></div>` +
+  `<div class="sig-block"><p class="sig-line">Café Rosa S.A.</p><p class="sig-meta">Cliente · Fecha: [__________]</p></div></div>`;
 const CONTRACT = (title) => `<h1>${title}</h1><p>Entre <strong>Sofía Méndez</strong> y <strong>Café Rosa S.A.</strong> se celebra el presente contrato.</p>
 <h2>Primera: Objeto</h2><p>La prestadora diseñará la identidad de marca del cliente, incluyendo logotipo y paleta de colores.</p>
 <h2>Segunda: Precio</h2><p>El cliente pagará 800 USD en dos tractos iguales.</p><ol><li>Primer pago al firmar.</li><li>Segundo pago a la entrega.</li></ol>
-<script>alert(1)</script><p onclick="x()">Texto con atributo peligroso.</p>`;
+<script>alert(1)</script><p onclick="x()">Texto con atributo peligroso.</p>` + SIGS;
 // Simula la respuesta en vivo: entrega el texto en pedacitos.
 async function fakeStream(opts) {
   const full = String(await fakeAI(opts));
@@ -65,6 +67,9 @@ async function fakeAI({ system, parts, json }) {
       keyPoints: ["Pagás el 1 de cada mes"], dates: ["Inicio: 1 de enero"], money: ["$500 al mes", "Depósito $1000"],
       redFlags: [{ level: "alta", issue: "Multa del 50% por salir antes", why: "Es muy alta." }], questions: ["¿Me devuelven el depósito?"], isContract: true };
   }
+  // Simula un contrato que llega cortado: la continuación trae lo que faltaba.
+  if (system.includes("quedó cortado")) return "<h2>Tercera: Plazo</h2><p>La entrega será en 30 días.</p>" + SIGS;
+  if (system.includes("experta en redactar") && text.includes("CORTADO")) return CONTRACT("Contrato de Diseño").split("<h2>Firmas</h2>")[0] + "<p>La prestadora se comp";
   if (system.includes("plantilla reutilizable")) {
     return parts[0].text.replace(/Sofía Méndez/g, "{nombre de la prestadora}").replace(/Café Rosa S\.A\./g, "{nombre del cliente}").replace(/800 USD/g, "{monto}");
   }

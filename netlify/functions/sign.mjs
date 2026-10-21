@@ -7,7 +7,7 @@ import {
   openStore, getContract, saveContract, keys, updateShareMeta, getIndex, getLog, updateLog, patchMeta,
   TOKEN_RE, clientIP, userAgent,
 } from "../lib/data.mjs";
-import { documentHash } from "../../shared/integrity.mjs";
+import { documentHash, placeSignature } from "../../shared/integrity.mjs";
 import { trySend, emailLayout } from "../lib/email.mjs";
 import { inviteEmail, signLink } from "./share.mjs";
 
@@ -122,8 +122,7 @@ export const makeHandler = ({ store: storeFactory = openStore, now = () => Date.
       `<div class="sig-block"><img src="${signature}" alt="${escapeHTML("Firma de " + name)}">` +
       `<p class="sig-line">${escapeHTML(name)}</p>` +
       `<p class="sig-meta">${escapeHTML((share.role ? share.role + " · " : "") + date + " · firma electrónica")}</p></div>`;
-    const heading = contract.html.includes('class="signatures"') ? "" : "<h2>Firmas</h2>";
-    contract.html = `${contract.html}${heading}<div class="signatures">${block}</div>`;
+    contract.html = placeSignature(contract.html, { block, name, role: share.role || "" });
     contract.updated = Math.max(signedAt, contract.updated + 1);
 
     await saveContract(store, share.uid, contract, { versionLabel: `Firmado por ${name}` });

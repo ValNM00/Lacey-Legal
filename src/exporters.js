@@ -128,6 +128,8 @@ export async function exportDocx(docEl, { brand, certificate } = {}) {
           out.push(new Paragraph({
             alignment: center ? AlignmentType.CENTER : AlignmentType.JUSTIFIED,
             border: el.classList.contains("sig-line") ? { top: { style: "single", size: 6, color: "2D1A29", space: 4 } } : undefined,
+            // espacio en blanco para firmar a mano si todavía no hay firma
+            spacing: el.classList.contains("sig-line") && !el.closest(".sig-block")?.querySelector("img") ? { before: 1100 } : undefined,
             children: runsOf(el, el.classList.contains("sig-meta") ? { size: 18, color: "6B5566" } : {}),
           }));
           break;

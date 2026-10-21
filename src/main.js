@@ -1,6 +1,6 @@
 /* ───────────── Lacey Legal · aplicación principal ───────────── */
 import {
-  $, $$, toast, escapeHTML, sanitize, cleanAIHtml, ai, aiStream, frameThrottle, debounce, uid, store,
+  $, $$, toast, escapeHTML, sanitize, cleanAIHtml, ai, aiComplete, frameThrottle, debounce, uid, store,
   fileToBase64, daysLeft, openDialog, closeDialog,
 } from "./util.js";
 import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode, lastTranslateError } from "./i18n.js";
@@ -15,6 +15,7 @@ import { initCollab, renderShares, updateCommentsBadge, certificateFor, integrit
 import { initSettings, openSettings } from "./settings.js";
 import { attachDictation } from "./dictation.js";
 import { diffWords, diffStats, renderDiff, htmlToText } from "./diff.js";
+import { placeSignature } from "../shared/integrity.mjs";
 
 const TYPE_IDS = [
   "servicios", "pago", "nda", "mantenimiento", "contratista",
@@ -265,10 +266,10 @@ $("#generateBtn").addEventListener("click", async () => {
       $(".editor-card").scrollIntoView({ behavior: "smooth", block: "start" });
     };
     let first = null;
-    const html = await aiStream({ action: "generate", contractType: t("type_" + selectedType), details, language: lang }, (text) => {
+    const html = await aiComplete({ action: "generate", contractType: t("type_" + selectedType), details, language: lang }, (text) => {
       if (!started) first = first || start();
       paint(text);
-    });
+    }, { mode: "generate" });
     await first;
     paint.flush();
     setDocHTML(cleanAIHtml(html), lang);
@@ -337,7 +338,7 @@ $("#translateBtn").addEventListener("click", async () => {
     const paint = frameThrottle((text) => { $("#loading").classList.add("hidden"); setDocHTML(withSigs(text), lang); });
     let html;
     try {
-      html = withSigs(await aiStream({ action: "translate", html: clone.innerHTML, language: lang }, paint));
+      html = withSigs(await aiComplete({ action: "translate", html: clone.innerHTML, language: lang }, paint, { mode: "translate", source: clone.innerHTML }));
     } catch (err) {
       paint.flush();
       doc.innerHTML = original; // si se corta a la mitad, vuelve el contrato como estaba
@@ -369,16 +370,9 @@ $("#signBtn").addEventListener("click", () => {
 $("#clearPad").addEventListener("click", pad.reset);
 $("#cancelSign").addEventListener("click", () => closeDialog(signModal));
 
-function appendSignature(block) {
-  let area = $(".signatures", doc);
-  if (!area) {
-    const h = document.createElement("h2");
-    h.textContent = t("signaturesHeading");
-    area = document.createElement("div");
-    area.className = "signatures";
-    doc.append(h, area);
-  }
-  area.append(block);
+function appendSignature(block, { name = "", role = "" } = {}) {
+  // Ocupa el espacio de firma de esa persona (o el primero libre); si no hay, agrega la sección.
+  doc.innerHTML = sanitize(placeSignature(doc.innerHTML, { block: block.outerHTML, name, role, heading: escapeHTML(t("signaturesHeading")) }));
 }
 
 $("#confirmSign").addEventListener("click", async () => {
@@ -386,7 +380,7 @@ $("#confirmSign").addEventListener("click", async () => {
   if (!name) return toast(t("needSignerName"), true);
   if (!pad.hasInk()) return toast(t("needInk"), true);
   const role = $("#signRole").value.trim();
-  appendSignature(signatureBlock({ png: pad.toPNG(), name, meta: `${role ? role + " · " : ""}${new Date().toLocaleDateString()}` }));
+  appendSignature(signatureBlock({ png: pad.toPNG(), name, meta: `${role ? role + " · " : ""}${new Date().toLocaleDateString(langCode(getUILang()))}` }), { name, role });
   closeDialog(signModal);
   pendingAudit = { type: "signed-here", name, role };
   await save({ version: t("vSigned", { name }), silent: true });

@@ -270,6 +270,7 @@ textarea { resize: vertical; }
 .doc .sig-block { flex: 1 1 220px; text-align: center; page-break-inside: avoid; }
 .doc .sig-block img { height: 80px; width: auto; display: block; margin: 0 auto; }
 .doc .sig-block .sig-line { border-top: 1px solid #2d1a29; padding-top: .3rem; margin: 0; text-align: center; }
+.doc .sig-block:not(:has(img)) { padding-top: 72px; } /* espacio para firmar */
 .doc .sig-block .sig-meta { font-size: .85rem; color: #6b5566; margin: 0; text-align: center; }
 .doc.empty { display: grid; place-items: center; }
 .empty-state { text-align: center; color: #7a5470; font-family: var(--font-body); max-width: 22rem; }

@@ -124,11 +124,13 @@ export async function geminiStream({ system, parts, temperature = 0.5, think = f
       body: requestBody({ system, parts, temperature, thinking }),
     }), wait);
 
-  return (async function* () {
+  const meta = { finishReason: "" };
+  const it = (async function* () {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
     let any = false;
+    try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -140,12 +142,18 @@ export async function geminiStream({ system, parts, temperature = 0.5, think = f
         if (!line.startsWith("data:")) continue;
         let evt;
         try { evt = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (evt.candidates?.[0]?.finishReason) meta.finishReason = evt.candidates[0].finishReason;
         const text = (evt.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
         if (text) { any = true; yield text; }
       }
     }
+    } finally {
+      reader.cancel().catch(() => {}); // si cortamos antes, no seguimos descargando
+    }
     if (!any) throw new HttpError(502, "La IA no devolvió texto. Probá reformulando.");
   })();
+  it.meta = meta; // finishReason: "MAX_TOKENS" si se quedó sin espacio
+  return it;
 }
 
 function parseResult(data, json) {

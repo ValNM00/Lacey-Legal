@@ -21,7 +21,7 @@ const fmt = (ts) => new Date(ts).toLocaleString(langCode(getUILang()), { dateSty
 
 /** Firmas que se ven en el documento (sirve también sin cuenta). */
 export function signaturesInDoc(docEl) {
-  return [...docEl.querySelectorAll(".sig-block")].map((b) => ({
+  return [...docEl.querySelectorAll(".sig-block")].filter((b) => b.querySelector("img")).map((b) => ({
     name: b.querySelector(".sig-line")?.textContent.trim() || "",
     meta: b.querySelector(".sig-meta")?.textContent.trim() || "",
   }));

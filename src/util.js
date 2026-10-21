@@ -66,20 +66,63 @@ export async function aiStream(payload, onText) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError(data.error || `Error ${res.status}`, res.status, data);
     onText(String(data.result || ""));
-    return String(data.result || "");
+    return { text: String(data.result || ""), more: false };
   }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let text = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += dec.decode(value, { stream: true });
-    const cut = text.indexOf("\u0000ERROR:");
-    if (cut >= 0) throw new ApiError(text.slice(cut + 7) || "La IA se cortó. Intentá de nuevo.", 502);
-    onText(text);
+  let more = false;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += dec.decode(value, { stream: true });
+      const cut = text.indexOf("\u0000ERROR:");
+      if (cut >= 0) {
+        if (!text.slice(0, cut).trim()) throw new ApiError(text.slice(cut + 7) || "La IA se cortó. Intentá de nuevo.", 502);
+        text = text.slice(0, cut); // se cortó a la mitad: seguimos con lo que llegó
+        more = true;
+        break;
+      }
+      onText(text.replace("\u0000MORE", ""));
+    }
+  } catch (err) {
+    if (err instanceof ApiError || !text.trim()) throw err instanceof ApiError ? err : new ApiError("Se cortó la conexión. Intentá de nuevo.", 0);
+    more = true; // la conexión se cortó: pedimos el resto
   }
+  if (text.includes("\u0000MORE")) { more = true; text = text.replace("\u0000MORE", ""); }
   if (!text.trim()) throw new ApiError("La IA no devolvió texto. Probá reformulando.", 502);
+  return { text, more };
+}
+
+/** Recorta un HTML cortado hasta el último bloque completo. */
+function lastWholeBlock(html) {
+  const re = /<\/(?:p|h1|h2|h3|li|ul|ol|div)>/gi;
+  let end = -1;
+  for (let m = re.exec(html); m; m = re.exec(html)) end = m.index + m[0].length;
+  return end > 0 ? html.slice(0, end) : html;
+}
+
+/**
+ * Contrato completo en vivo: si la respuesta llega cortada (por tiempo o por largo),
+ * pide la continuación y la va pegando, hasta 3 veces.
+ * mode "generate": está completo cuando termina con la sección de firmas.
+ * mode "translate": cuando el servidor no avisó que faltaba y llegó la sección de firmas (si el original la tiene).
+ */
+export async function aiComplete(payload, onText, { mode, source = "" } = {}) {
+  let { text, more } = await aiStream(payload, onText);
+  text = cleanAIHtml(text);
+  const needsSigs = mode === "generate" || source.includes('class="signatures"');
+  const complete = (h) => !needsSigs || (h.includes('class="signatures"') && /<\/div>\s*$/.test(h));
+  for (let i = 0; i < 3 && (more || !complete(text)); i++) {
+    const done = lastWholeBlock(text);
+    const next = await aiStream(
+      { action: "continue", mode, done, source, details: payload.details || "", language: payload.language },
+      (t) => onText(done + cleanAIHtml(t)),
+    );
+    text = done + cleanAIHtml(next.text);
+    more = next.more;
+  }
   return text;
 }
 

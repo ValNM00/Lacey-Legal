@@ -14,7 +14,8 @@ import { json, readJSON, str, wrap, checkOrigin, HttpError, env } from "../lib/h
 import { gemini, geminiStream, DEFAULT_MODELS, lastModel } from "../lib/gemini.mjs";
 
 /** Versión publicada: abrí /api/usage en tu sitio para ver cuál está activa. */
-export const APP_VERSION = "2026-10-20 · v5 (más rápida y en vivo)";
+const STREAM_BUDGET_MS = Number(env("STREAM_BUDGET_MS")) || 22_000;
+export const APP_VERSION = "2026-10-20 · v6 (firmas y contratos completos)";
 import { openStore, getUsage, addUsage, clientIP } from "../lib/data.mjs";
 import { sha256 } from "../../shared/integrity.mjs";
 import { resolveUser } from "../lib/auth.mjs";
@@ -27,6 +28,14 @@ const limits = () => ({
 const HTML_RULES =
   "Devolvé SOLO HTML válido usando únicamente las etiquetas h1, h2, h3, p, ul, ol, li, strong, em, br. " +
   "Nada de markdown, nada de ```, nada de <html>, <head>, <body>, <style> ni atributos.";
+
+// Sección final de firmas: espacios vacíos, uno por parte, que se llenan al firmar.
+const SIGNATURE_RULES =
+  "Terminá SIEMPRE el contrato con la sección de firmas, exactamente con este formato (es la única excepción a la regla de no usar atributos): " +
+  '<h2>TÍTULO</h2><div class="signatures"><div class="sig-block"><p class="sig-line">NOMBRE</p><p class="sig-meta">ROL</p></div>…</div> ' +
+  "donde TÍTULO es la palabra Firmas traducida al idioma del contrato, hay un sig-block por cada parte que firma, NOMBRE es el nombre de esa parte " +
+  "(o [__________] si no se conoce) y ROL es su rol en el contrato (por ejemplo Arrendador, Cliente, Prestadora del servicio) seguido de ' · ' y la palabra Fecha traducida con [__________]. " +
+  "No escribas nada después de esa sección.";
 
 const REWRITE_MODES = {
   improve: "Mejorá la redacción del texto para que sea más clara, precisa y profesional, sin cambiar su significado.",
@@ -148,14 +157,21 @@ export const makeHandler = ({ ai: model = gemini, stream: streamModel = geminiSt
     // En vivo: el texto llega a medida que la IA lo escribe (generar y traducir contratos).
     const aiLive = async (opts) => {
       if (!body.stream) return json({ result: await ai(opts) });
-      await checkLimit();
+      if (!opts.free) await checkLimit();
       const chunks = await streamModel({ tier: "fast", ...opts });
-      await countUse();
+      if (!opts.free) await countUse();
       const enc = new TextEncoder();
+      const started = Date.now();
       return new Response(new ReadableStream({
         async start(controller) {
           try {
-            for await (const t of chunks) controller.enqueue(enc.encode(t));
+            let more = false;
+            for await (const t of chunks) {
+              controller.enqueue(enc.encode(t));
+              // Netlify corta las funciones a los ~30 s: paramos antes y el navegador pide el resto.
+              if (Date.now() - started > STREAM_BUDGET_MS) { more = true; break; }
+            }
+            if (more || chunks.meta?.finishReason === "MAX_TOKENS") controller.enqueue(enc.encode("\u0000MORE"));
           } catch (err) {
             controller.enqueue(enc.encode(`\u0000ERROR:${err.message || "La IA se cortó."}`));
           }
@@ -179,9 +195,9 @@ export const makeHandler = ({ ai: model = gemini, stream: streamModel = geminiSt
             "terminación, confidencialidad, responsabilidad, ley aplicable y jurisdicción, y disposiciones finales. " +
             "Si se indica un país, adaptá la terminología y la ley aplicable a ese país. " +
             "Cuando falte un dato concreto (nombre, cédula, monto, dirección, fecha), dejá el espacio como [__________]. " +
-            "Extensión: entre 600 y 1300 palabras. " +
-            "No agregues la sección de firmas: la aplicación la agrega aparte. No agregues notas ni explicaciones fuera del contrato. " +
-            HTML_RULES,
+            "Extensión: entre 600 y 1100 palabras. " +
+            "No agregues notas ni explicaciones fuera del contrato. " +
+            HTML_RULES + " " + SIGNATURE_RULES,
           parts: [{ text: `Tipo de contrato: ${str(body.contractType, 80) || "Personalizado"}\n\nDetalles:\n${details}` }],
           temperature: 0.6,
           tier: "smart",
@@ -342,6 +358,37 @@ export const makeHandler = ({ ai: model = gemini, stream: streamModel = geminiSt
           temperature: 0.2,
         });
         return json({ result });
+      }
+
+      case "continue": {
+        // Sigue un contrato que quedó cortado (por tiempo o por largo). No cuenta como otro uso,
+        // pero tiene su propio tope diario.
+        const done = str(body.done, 90_000);
+        if (done.length < 50) throw new HttpError(400, "No hay nada que continuar.");
+        if (usageStore) {
+          const k = `cont_${usageKey}`;
+          if ((await getUsage(usageStore, k, now()).catch(() => 0)) >= 80) throw new HttpError(429, "Probá de nuevo mañana.");
+          await addUsage(usageStore, k, now()).catch(() => {});
+        }
+        const source = str(body.source, 80_000);
+        const isTranslate = body.mode === "translate" && source;
+        return aiLive({
+          free: true,
+          system: (isTranslate
+            ? `Estás traduciendo un contrato en HTML al idioma: ${language}. La traducción quedó cortada. ` +
+              "Te paso el ORIGINAL completo y lo que ya está traducido. Continuá la traducción desde el punto exacto donde quedó, " +
+              "sin repetir nada de lo ya traducido, manteniendo las mismas etiquetas, atributos class y marcadores [[SIG0]] y [__________]. "
+            : `Estás redactando un contrato en HTML en este idioma: ${language}. El texto quedó cortado. ` +
+              "Continuá desde el punto exacto donde quedó, sin repetir nada, con el mismo estilo y numeración de cláusulas, " +
+              "y completá las cláusulas que falten. " + HTML_RULES + " " + SIGNATURE_RULES + " ") +
+            "Devolvé SOLO el HTML que sigue, sin ``` ni explicaciones.",
+          parts: [{
+            text: (isTranslate ? `ORIGINAL:\n${source}\n\n` : `Pedido original:\n${str(body.details, 5000)}\n\n`) +
+              `${isTranslate ? "YA TRADUCIDO" : "YA ESCRITO"} (seguí justo después del final):\n${done}`,
+          }],
+          temperature: 0.4,
+          tier: isTranslate ? "fast" : "smart",
+        });
       }
 
       case "translateUI": {
