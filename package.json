@@ -1,0 +1,20 @@
+{
+  "name": "lacey-legal",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "demo": "npm run build && node tests/demo-server.mjs serve"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.4",
+    "@netlify/identity": "^2.0.0"
+  },
+  "devDependencies": {
+    "docx": "^9.12.0",
+    "esbuild": "^0.28.2",
+    "html2pdf.js": "^0.14.0"
+  },
+  "engines": { "node": ">=20" }
+}
