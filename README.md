@@ -82,7 +82,7 @@ Las claves secretas **nunca** están en el frontend.
    | `AI_DAILY_LIMIT` | Usos de IA por día con cuenta (por defecto 40) | No |
    | `AI_DAILY_LIMIT_ANON` | Usos de IA por día sin cuenta (por defecto 12) | No |
    | `USAGE_SALT` | Texto secreto para cifrar las IP en el conteo de uso | Recomendada |
-   | `GEMINI_MODEL` | Otro modelo de Gemini (por defecto `gemini-2.5-flash`) | No |
+   | `GEMINI_MODEL` | Forzar un modelo de Gemini. Si no la ponés, la app usa `gemini-3.8-flash` y, si Google lo retira, pasa sola al siguiente vigente | No (mejor no ponerla) |
 
 4. **Activar las cuentas**: *Project configuration → Identity → Enable Identity*. Para el botón de Google: *Identity → Registration → External providers → Google*.
 5. **Deploy**: *Deploys → Trigger deploy* para que tome las variables.

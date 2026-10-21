@@ -134,7 +134,7 @@ test("borrar contrato elimina versiones y links", async () => {
 
 test("IA: valida acciones y cachea traducciones de la interfaz", async () => {
   let calls = 0;
-  const fake = async ({ json }) => { calls++; return json ? ["Hello", "World"] : "<h1>Hi</h1>"; };
+  const fake = async ({ json }) => { calls++; return json ? [{ i: 0, t: "Hello" }, { i: 1, t: "World" }] : "<h1>Hi</h1>"; };
   const H = ai({ ai: fake, store: () => store, getUser: async () => null });
   assert.equal((await call(H, "POST", "/api/ai", { action: "nope" })).status, 400);
   assert.equal((await call(H, "POST", "/api/ai", { action: "analyze", file: { mime: "application/zip", data: "AAAA" } })).status, 400);
@@ -308,5 +308,68 @@ test("límite diario de IA", async () => {
   assert.equal((await R("2.2.2.2")).status, 200, "otra IP tiene su propio límite");
   const u = await H(new Request(ORIGIN + "/api/usage", { headers: { "x-nf-client-connection-ip": "1.1.1.1" } }), { params: {} });
   assert.deepEqual(await u.json(), { used: 2, limit: 2, loggedIn: false });
+  delete process.env.AI_DAILY_LIMIT_ANON;
+});
+
+
+// ───────────────────────── modelos de Gemini ─────────────────────────
+import { gemini, _resetWorkingModel } from "../netlify/lib/gemini.mjs";
+
+const reply = (status, body) => ({ ok: status < 400, status, json: async () => body });
+const okText = (text) => reply(200, { candidates: [{ content: { parts: [{ text }] } }] });
+
+test("Gemini: si un modelo fue retirado, usa el siguiente y lo recuerda", async () => {
+  process.env.GEMINI_API_KEY = "k";
+  delete process.env.GEMINI_MODEL;
+  _resetWorkingModel();
+  const seen = [];
+  const fetchImpl = async (url, o) => {
+    const model = url.match(/models\/([^:]+):/)[1];
+    seen.push({ model, cfg: JSON.parse(o.body).generationConfig });
+    if (model === "gemini-3.8-flash") return reply(404, { error: { message: "This model models/gemini-3.8-flash is no longer available." } });
+    return okText("hola");
+  };
+  assert.equal(await gemini({ system: "s", parts: [{ text: "x" }], fetchImpl, wait: async () => {} }), "hola");
+  assert.deepEqual(seen.map((x) => x.model), ["gemini-3.8-flash", "gemini-flash-latest"]);
+  assert.equal(seen[1].cfg.thinkingConfig.thinkingLevel, "low");
+  seen.length = 0;
+  await gemini({ system: "s", parts: [{ text: "x" }], fetchImpl, wait: async () => {} });
+  assert.equal(seen[0].model, "gemini-flash-latest", "recuerda el modelo que funcionó");
+});
+
+test("Gemini: reintenta si está saturado y sin 'thinking' si el modelo no lo acepta", async () => {
+  _resetWorkingModel();
+  let n = 0;
+  let r = await gemini({ system: "s", parts: [{ text: "x" }], wait: async () => {}, fetchImpl: async () => (++n < 3 ? reply(429, { error: { message: "quota" } }) : okText("ok")) });
+  assert.equal(r, "ok");
+  assert.equal(n, 3);
+  _resetWorkingModel();
+  const cfgs = [];
+  r = await gemini({ system: "s", parts: [{ text: "x" }], wait: async () => {}, fetchImpl: async (u, o) => {
+    const cfg = JSON.parse(o.body).generationConfig; cfgs.push(cfg);
+    return cfg.thinkingConfig ? reply(400, { error: { message: "thinking_level is not supported for this model" } }) : okText("sin pensar");
+  } });
+  assert.equal(r, "sin pensar");
+  assert.ok(cfgs[0].thinkingConfig && !cfgs[1].thinkingConfig);
+});
+
+test("Gemini: clave inválida da un mensaje claro", async () => {
+  _resetWorkingModel();
+  await assert.rejects(
+    gemini({ system: "s", parts: [{ text: "x" }], wait: async () => {}, fetchImpl: async () => reply(400, { error: { message: "API key not valid. Please pass a valid API key." } }) }),
+    /GEMINI_API_KEY/,
+  );
+});
+
+test("Traducir la página: alinea por índice y no gasta el límite diario", async () => {
+  process.env.AI_DAILY_LIMIT_ANON = "1";
+  const fake = async ({ json }) => [{ i: 1, t: "Mundo" }, { i: 0, t: "Hola" }, { i: 2, t: "Hecho" }];
+  const H = ai({ ai: fake, store: () => memStore(), getUser: async () => null });
+  const R = (body) => H(new Request(ORIGIN + "/api/ai", { method: "POST", headers: { "Content-Type": "application/json", Origin: ORIGIN, "x-nf-client-connection-ip": "9.9.9.9" }, body: JSON.stringify(body) }), { params: {} });
+  for (let k = 0; k < 3; k++) {
+    const r = await R({ action: "translateUI", language: "Spanish" + k, strings: ["Hello", "World", "Done"] });
+    assert.equal(r.status, 200);
+    assert.deepEqual((await r.json()).result, ["Hola", "Mundo", "Hecho"]);
+  }
   delete process.env.AI_DAILY_LIMIT_ANON;
 });

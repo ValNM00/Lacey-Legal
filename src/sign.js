@@ -1,6 +1,6 @@
 /* ───────────── Lacey Legal · página pública de firma (firmar.html) ───────────── */
 import { $, toast, escapeHTML, sanitize, api, ai, cleanAIHtml, store } from "./util.js";
-import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode } from "./i18n.js";
+import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode, lastTranslateError } from "./i18n.js";
 import { createPad, signatureBlock } from "./signature-pad.js";
 import { exportPDF } from "./exporters.js";
 
@@ -191,7 +191,7 @@ $("#uiLang").addEventListener("change", async () => {
   const v = readLang($("#uiLang"), getUILang());
   if (!v) return;
   toast(t("uiTranslating"));
-  if (!(await setUILang(v))) toast(t("uiTranslateFailed"), true);
+  if (!(await setUILang(v))) toast(t("uiTranslateFailed") + (lastTranslateError() ? ` (${lastTranslateError()})` : ""), true);
   $("#uiLang").value = getUILang();
 });
 onLangChange(() => {

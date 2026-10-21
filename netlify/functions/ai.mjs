@@ -317,30 +317,50 @@ export const makeHandler = ({ ai: model = gemini, store: storeFactory = openStor
       }
 
       case "translateUI": {
-        const strings = Array.isArray(body.strings) ? body.strings.filter((s) => typeof s === "string").slice(0, 120) : [];
+        // Traducción de la interfaz: no cuenta en el límite diario (es la página, no tu contenido),
+        // queda en caché para todas las personas y tiene su propio tope anti-abuso.
+        const strings = Array.isArray(body.strings) ? body.strings.filter((s) => typeof s === "string").slice(0, 320) : [];
         if (!strings.length) throw new HttpError(400, "No hay textos para traducir.");
-        if (strings.join("").length > 30_000) throw new HttpError(413, "Demasiado texto.");
+        if (strings.join("").length > 24_000) throw new HttpError(413, "Demasiado texto.");
         const cacheKey = `i18n/${language.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}/${(await sha256(JSON.stringify(strings))).slice(0, 32)}`;
-        let store;
+        let store = null;
         try {
           store = storeFactory();
           const cached = await store.get(cacheKey, { type: "json" });
           if (Array.isArray(cached) && cached.length === strings.length) return json({ result: cached, cached: true });
-        } catch (e) {
+        } catch {
           store = null; // sin Blobs (p. ej. local) traducimos igual
         }
-        const result = await ai({
+        if (usageStore) {
+          const uiKey = `ui_${usageKey}`;
+          if ((await getUsage(usageStore, uiKey, now()).catch(() => 0)) >= 40) {
+            throw new HttpError(429, "Probaste muchos idiomas hoy. Intentá de nuevo mañana.");
+          }
+          await addUsage(usageStore, uiKey, now()).catch(() => {});
+        }
+        const out = await model({
           system:
-            `Traducí cada cadena del arreglo JSON al idioma: ${language}. Es la interfaz de "Lacey Legal", una app web para crear contratos ` +
-            "con un tono amigable y femenino. Devolvé un arreglo JSON con EXACTAMENTE la misma cantidad de elementos y en el mismo orden. " +
-            "No agregues emojis. Conservá las etiquetas HTML (<em>, <strong>, <br>), marcadores entre llaves como {n} o {name} y el nombre Lacey Legal sin traducir.",
-          parts: [{ text: JSON.stringify(strings) }],
+            `Traducí al idioma "${language}" el texto "s" de cada objeto del arreglo JSON. Es la interfaz de "Lacey Legal", ` +
+            "una app web para crear y firmar contratos, con un tono cálido, cercano y profesional. " +
+            'Respondé con un arreglo JSON de objetos {"i": número, "t": traducción}, uno por cada objeto recibido, con el mismo "i". ' +
+            "No agregues emojis. Conservá tal cual las etiquetas HTML (<em>, <strong>, <br>), los marcadores entre llaves como {n} o {name}, " +
+            "los signos y el nombre Lacey Legal.",
+          parts: [{ text: JSON.stringify(strings.map((s, i) => ({ i, s }))) }],
           temperature: 0.2,
-          json: S("ARRAY", { items: S("STRING") }),
+          json: S("ARRAY", { items: S("OBJECT", { properties: { i: S("INTEGER"), t: S("STRING") }, required: ["i", "t"] }) }),
         });
-        if (!Array.isArray(result) || result.length !== strings.length) throw new HttpError(502, "La traducción vino incompleta. Intentá de nuevo.");
-        if (store) await store.setJSON(cacheKey, result).catch(() => {});
-        return json({ result });
+        // Alineamos por índice: si falta alguna, queda en el idioma original.
+        const result = strings.slice();
+        let got = 0;
+        for (const r of Array.isArray(out) ? out : []) {
+          if (Number.isInteger(r?.i) && r.i >= 0 && r.i < strings.length && typeof r.t === "string" && r.t.trim()) {
+            result[r.i] = r.t;
+            got++;
+          }
+        }
+        if (got < strings.length * 0.6) throw new HttpError(502, "La traducción vino incompleta. Intentá de nuevo.");
+        if (store && got === strings.length) await store.setJSON(cacheKey, result).catch(() => {});
+        return json({ result, partial: got < strings.length });
       }
 
       default:

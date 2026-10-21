@@ -36,7 +36,7 @@ async function fakeAI({ system, parts, json }) {
   const text = parts.map((p) => p.text || "").join("\n");
   aiCalls.push({ system: system.slice(0, 60), text: text.slice(0, 200), hasFile: parts.some((p) => p.inlineData) });
   if (Array.isArray(json?.items ? [] : null) || json?.type === "ARRAY") {
-    return JSON.parse(parts[0].text).map((s) => (s.includes("{") || s.includes("<") ? s : "EN: " + s));
+    return JSON.parse(parts[0].text).map(({ i, s }) => ({ i, t: s.includes("{") || s.includes("<") ? s : "EN: " + s }));
   }
   if (json && system.includes("Sos Lacey")) {
     const q = text.split("Usuaria:").pop().toLowerCase();

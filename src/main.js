@@ -3,7 +3,7 @@ import {
   $, $$, toast, escapeHTML, sanitize, cleanAIHtml, ai, debounce, uid, store,
   fileToBase64, daysLeft, openDialog, closeDialog,
 } from "./util.js";
-import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode } from "./i18n.js";
+import { t, initI18n, setUILang, getUILang, onLangChange, fillLangSelect, readLang, RTL, langCode, lastTranslateError } from "./i18n.js";
 import { initAuth, onUser, currentUser, openAuth, authAvailable } from "./auth.js";
 import { localLib, cloudLib, ConflictError, localTemplates, cloudTemplates, localProfile, cloudProfile } from "./storage.js";
 import { createPad, signatureBlock } from "./signature-pad.js";
@@ -711,7 +711,11 @@ async function changeUILang(target) {
     onStart: () => { $("#langBtn").classList.add("spinning"); toast(t("uiTranslating")); },
     onEnd: () => $("#langBtn").classList.remove("spinning"),
   });
-  if (!ok) toast(t("uiTranslateFailed"), true);
+  if (!ok) {
+    const why = lastTranslateError();
+    toast(t("uiTranslateFailed") + (why ? ` (${why})` : ""), true);
+    setMood("preocupada");
+  }
   $("#uiLang").value = getUILang();
   $("#outLang").value = getUILang();
   $("#langMenu").classList.add("hidden");

@@ -39,6 +39,9 @@ const listeners = new Set();
 let collected = false;
 
 export const getUILang = () => lang;
+let lastError = null;
+/** Último error al traducir la página (para mostrarlo). */
+export const lastTranslateError = () => lastError?.message || "";
 export const langCode = (name) => CODES[name] || "es";
 export const onLangChange = (fn) => listeners.add(fn);
 
@@ -108,12 +111,36 @@ async function translateAll(target) {
   const cacheKey = `laceyLegal.i18n.${target}.${hash(strings.join("\u0001"))}`;
   const cached = store.get(cacheKey);
   if (cached) return cached;
+  // Pocos pedidos grandes, de a uno (Gemini gratis acepta pocas llamadas por minuto).
   const chunks = [];
-  for (let i = 0; i < strings.length; i += 90) chunks.push(strings.slice(i, i + 90));
-  const results = await Promise.all(chunks.map((c) => ai({ action: "translateUI", language: target, strings: c })));
+  let chunk = [];
+  let size = 0;
+  for (const str of strings) {
+    if (chunk.length && (size + str.length > 9000 || chunk.length >= 300)) { chunks.push(chunk); chunk = []; size = 0; }
+    chunk.push(str);
+    size += str.length;
+  }
+  if (chunk.length) chunks.push(chunk);
+
   const map = {};
-  chunks.forEach((c, ci) => c.forEach((s, i) => { map[s] = results[ci][i] || s; }));
-  store.set(cacheKey, map);
+  let failed = 0;
+  let lastError = null;
+  for (const c of chunks) {
+    let result = null;
+    for (let attempt = 0; attempt < 2 && !result; attempt++) {
+      try {
+        result = await ai({ action: "translateUI", language: target, strings: c });
+      } catch (err) {
+        lastError = err;
+        if (err.status === 400 || err.status === 413) break;
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+    }
+    if (!result) { failed++; continue; }
+    c.forEach((str, i) => { map[str] = result[i] || str; });
+  }
+  if (failed === chunks.length) throw lastError || new Error("translate-failed");
+  if (!failed) store.set(cacheKey, map); // solo guardamos si salió completa
   return map;
 }
 
@@ -136,6 +163,7 @@ export async function setUILang(target, { onStart, onEnd } = {}) {
     return true;
   } catch (err) {
     console.error(err);
+    lastError = err;
     return false;
   } finally {
     onEnd?.();
